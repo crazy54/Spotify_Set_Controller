@@ -46,7 +46,7 @@ The Set Controller needs access to your Spotify account to manage playlists. You
 3. Click "Create an app".
 4. Fill in the details (App Name: The Set Controller, Description: Playlist Management Tool).
 5. After creation, click "Edit Settings" for your new app.
-6. Add a "Redirect URI": `http://localhost:8080` (This should match the `redirect_uri` in your `config.json`).
+6. Add a "Redirect URI": `http://localhost:8888` (This should match the `redirect_uri` in your `config.json`).
 7. Copy your Client ID and Client Secret.
 8. Create a `config.json` file in the root of the project directory (see the example in `spotify_tool.py` or below in section 5). Populate it with your `client_id`, `client_secret`, and `redirect_uri`.
 
