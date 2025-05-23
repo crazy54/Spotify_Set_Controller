@@ -1,0 +1,5 @@
+# This tool only needs one lib to function that is not 
+# included with python itself. 
+spotipy
+qrcode
+Pillow
