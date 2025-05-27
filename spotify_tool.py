@@ -330,13 +330,19 @@ def get_playlist_url_by_name(sp, playlist_name):
             print(f"✅ Found case-insensitive match: '{first_match_name}' (searched for '{playlist_name}')")
         elif len(case_insensitive_matches) > 1:
             print(f"⚠️ Multiple case-insensitive matches found for '{playlist_name}':")
-            for name in case_insensitive_matches.keys():
+            # Get the keys (playlist names) from the dictionary
+            matched_names = list(case_insensitive_matches.keys())
+            # Sort these names alphabetically
+            sorted_matched_names = sorted(matched_names) 
+            
+            for name in sorted_matched_names: # Print sorted names for clarity
                 print(f"   - {name}")
-            # Prioritize an exact case match among these if one exists, though unlikely if not caught above
-            # For now, take the first one found as per subtask description
-            first_match_name = list(case_insensitive_matches.keys())[0]
-            exact_match_id = case_insensitive_matches[first_match_name]
-            print(f"⚠️  Returning the first one found: '{first_match_name}'. Consider using a more specific name.")
+            
+            # Select the first name from the *sorted* list
+            first_match_name = sorted_matched_names[0] 
+            exact_match_id = case_insensitive_matches[first_match_name] # Get the ID using this name
+            
+            print(f"⚠️  Returning the first one from the alphabetically sorted list: '{first_match_name}'. Consider using a more specific name.")
             # No exact_match_id = None here, we proceed with the first one
 
     if exact_match_id:
