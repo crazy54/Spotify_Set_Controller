@@ -363,13 +363,49 @@ class TestParseArguments(unittest.TestCase):
     def test_parse_add_song_default_genre(self):
         with patch.object(sys, 'argv', ['spotify_tool.py', 'http://song.url']):
             args = parse_arguments()
-            self.assertEqual(args, {"command": "add_song", "url": "http://song.url", "genre": None})
+            self.assertEqual(args, {"command": "add_song", "urls": ["http://song.url"], "genre": None})
 
-    def test_parse_add_song_with_genre(self):
+    def test_parse_add_song_with_genre_long_form(self):
         with patch.object(sys, 'argv', ['spotify_tool.py', 'http://song.url', '--genre', 'rock']):
             args = parse_arguments()
-            self.assertEqual(args, {"command": "add_song", "url": "http://song.url", "genre": 'rock'})
+            self.assertEqual(args, {"command": "add_song", "urls": ["http://song.url"], "genre": 'rock'})
+
+    def test_parse_add_song_with_genre_short_form(self):
+        with patch.object(sys, 'argv', ['spotify_tool.py', 'http://song.url', '-g', 'pop']):
+            args = parse_arguments()
+            self.assertEqual(args, {"command": "add_song", "urls": ["http://song.url"], "genre": 'pop'})
+
+    def test_parse_multiple_songs_default_genre(self):
+        with patch.object(sys, 'argv', ['spotify_tool.py', 'http://song1.url', 'http://song2.url']):
+            args = parse_arguments()
+            self.assertEqual(args, {"command": "add_song", "urls": ["http://song1.url", "http://song2.url"], "genre": None})
+
+    def test_parse_multiple_songs_with_genre_long_form(self):
+        with patch.object(sys, 'argv', ['spotify_tool.py', 'http://s1.url', 'http://s2.url', 'http://s3.url', '--genre', 'trance']):
+            args = parse_arguments()
+            self.assertEqual(args, {"command": "add_song", "urls": ["http://s1.url", "http://s2.url", "http://s3.url"], "genre": 'trance'})
+
+    def test_parse_multiple_songs_with_genre_short_form(self):
+        with patch.object(sys, 'argv', ['spotify_tool.py', 'http://s1.url', 'http://s2.url', '-g', 'ambient']):
+            args = parse_arguments()
+            self.assertEqual(args, {"command": "add_song", "urls": ["http://s1.url", "http://s2.url"], "genre": 'ambient'})
             
+    def test_parse_add_song_no_urls_with_genre_flag(self):
+        # This should be caught by the check if song_urls list is empty
+        with patch.object(sys, 'argv', ['spotify_tool.py', '--genre', 'rock']):
+            with self.assertRaises(SystemExit):
+                parse_arguments()
+
+    def test_parse_add_song_unknown_flag_after_urls(self):
+        with patch.object(sys, 'argv', ['spotify_tool.py', 'http://s1.url', '--unknown-flag', '--genre', 'rock']):
+            with self.assertRaises(SystemExit): # Expect sys.exit due to unknown flag
+                parse_arguments()
+                
+    def test_parse_add_song_unknown_flag_after_urls_no_genre(self):
+        with patch.object(sys, 'argv', ['spotify_tool.py', 'http://s1.url', '--unknown-flag']):
+            with self.assertRaises(SystemExit): # Expect sys.exit due to unknown flag
+                parse_arguments()
+
     def test_parse_list_playlists_no_search(self):
         with patch.object(sys, 'argv', ['spotify_tool.py', '--list-playlists']):
             args = parse_arguments()
@@ -387,6 +423,153 @@ class TestParseArguments(unittest.TestCase):
             # The implementation was updated to handle this:
             # if search_term and search_term.startswith("-"): search_term = None
             self.assertEqual(args, {"command": "list_playlists", "search": None})
+
+# Need to import main from spotify_tool to test it
+from spotify_tool import main as spotify_main
+
+class TestMainFunctionality(unittest.TestCase):
+    @patch('spotify_tool.add_to_playlists')
+    @patch('spotify_tool.find_playlist_ids')
+    @patch('spotify_tool.get_genre_config')
+    @patch('spotify_tool.extract_track_id')
+    @patch('spotify_tool.setup_spotify_client')
+    @patch('spotify_tool.load_config')
+    @patch('spotify_tool.parse_arguments')
+    def test_main_add_multiple_songs_all_valid(
+        self, mock_parse_arguments, mock_load_config, mock_setup_spotify_client,
+        mock_extract_track_id, mock_get_genre_config, mock_find_playlist_ids,
+        mock_add_to_playlists
+    ):
+        # 1. Setup Mocks
+        mock_urls = ["url1", "url2", "url3"]
+        mock_parse_arguments.return_value = {
+            "command": "add_song", 
+            "urls": mock_urls, 
+            "genre": "test_genre"
+        }
+        
+        mock_config = {
+            "client_id": "test_id", "client_secret": "test_secret", "redirect_uri": "test_uri",
+            "genres": {
+                "test_genre": {"playlists": ["p1", "p2"], "save_to_liked": True}
+            }
+        }
+        mock_load_config.return_value = mock_config
+        
+        mock_sp_client = MagicMock()
+        mock_setup_spotify_client.return_value = mock_sp_client
+        
+        mock_extract_track_id.side_effect = lambda url: f"id_{url}" # e.g., url1 -> id_url1
+        
+        mock_genre_details = {"playlists": ["Playlist1", "Playlist2"], "save_to_liked": True}
+        mock_get_genre_config.return_value = mock_genre_details
+        
+        mock_target_playlist_ids = [("Playlist1", "pid1"), ("Playlist2", "pid2")]
+        mock_not_found_playlists = []
+        mock_find_playlist_ids.return_value = (mock_target_playlist_ids, mock_not_found_playlists)
+
+        # Mock add_to_playlists to return a list indicating success
+        mock_add_to_playlists.return_value = [("Playlist1", True, None)] 
+
+        # 2. Call main()
+        spotify_main()
+
+        # 3. Assertions
+        self.assertEqual(mock_extract_track_id.call_count, len(mock_urls))
+        for url in mock_urls:
+            mock_extract_track_id.assert_any_call(url)
+            
+        # get_genre_config, find_playlist_ids, add_to_playlists are called for each valid track
+        self.assertEqual(mock_get_genre_config.call_count, len(mock_urls))
+        self.assertEqual(mock_find_playlist_ids.call_count, len(mock_urls))
+        self.assertEqual(mock_add_to_playlists.call_count, len(mock_urls))
+
+        for url in mock_urls:
+            expected_track_id = f"id_{url}"
+            # Check that get_genre_config was called correctly for each track processing loop
+            mock_get_genre_config.assert_any_call(mock_config, "test_genre")
+            # Check find_playlist_ids call for each track
+            mock_find_playlist_ids.assert_any_call(mock_sp_client, mock_genre_details['playlists'])
+            # Check add_to_playlists call for each track
+            mock_add_to_playlists.assert_any_call(
+                mock_sp_client, 
+                expected_track_id, 
+                mock_target_playlist_ids, 
+                mock_genre_details['save_to_liked']
+            )
+
+    @patch('spotify_tool.add_to_playlists')
+    @patch('spotify_tool.find_playlist_ids')
+    @patch('spotify_tool.get_genre_config')
+    @patch('spotify_tool.extract_track_id')
+    @patch('spotify_tool.setup_spotify_client')
+    @patch('spotify_tool.load_config')
+    @patch('spotify_tool.parse_arguments')
+    def test_main_add_multiple_songs_one_invalid_url(
+        self, mock_parse_arguments, mock_load_config, mock_setup_spotify_client,
+        mock_extract_track_id, mock_get_genre_config, mock_find_playlist_ids,
+        mock_add_to_playlists
+    ):
+        # 1. Setup Mocks
+        valid_url1 = "url1"
+        invalid_url = "url_invalid"
+        valid_url2 = "url2"
+        mock_urls = [valid_url1, invalid_url, valid_url2]
+        
+        mock_parse_arguments.return_value = {
+            "command": "add_song", 
+            "urls": mock_urls, 
+            "genre": "test_genre"
+        }
+        
+        mock_config = {
+            "client_id": "test_id", "client_secret": "test_secret", "redirect_uri": "test_uri",
+            "genres": {"test_genre": {"playlists": ["p1"], "save_to_liked": False}}
+        }
+        mock_load_config.return_value = mock_config
+        
+        mock_sp_client = MagicMock()
+        mock_setup_spotify_client.return_value = mock_sp_client
+        
+        def extract_side_effect(url):
+            if url == invalid_url:
+                return None
+            return f"id_{url}"
+        mock_extract_track_id.side_effect = extract_side_effect
+        
+        mock_genre_details = {"playlists": ["P1"], "save_to_liked": False}
+        mock_get_genre_config.return_value = mock_genre_details
+        
+        mock_target_ids = [("P1", "pid1")]
+        mock_find_playlist_ids.return_value = (mock_target_ids, [])
+
+        mock_add_to_playlists.return_value = [("P1", True, None)]
+
+        # 2. Call main()
+        spotify_main()
+
+        # 3. Assertions
+        self.assertEqual(mock_extract_track_id.call_count, len(mock_urls))
+        mock_extract_track_id.assert_any_call(valid_url1)
+        mock_extract_track_id.assert_any_call(invalid_url)
+        mock_extract_track_id.assert_any_call(valid_url2)
+            
+        # Functions below are called only for valid tracks (url1, url2)
+        expected_calls_for_valid_tracks = 2
+        self.assertEqual(mock_get_genre_config.call_count, expected_calls_for_valid_tracks)
+        self.assertEqual(mock_find_playlist_ids.call_count, expected_calls_for_valid_tracks)
+        self.assertEqual(mock_add_to_playlists.call_count, expected_calls_for_valid_tracks)
+
+        # Check calls for valid_url1
+        mock_add_to_playlists.assert_any_call(mock_sp_client, "id_url1", mock_target_ids, False)
+        # Check calls for valid_url2
+        mock_add_to_playlists.assert_any_call(mock_sp_client, "id_url2", mock_target_ids, False)
+        
+        # Check that add_to_playlists was NOT called with None or anything related to invalid_url
+        for call_args in mock_add_to_playlists.call_args_list:
+            args, _ = call_args
+            # args[1] is the track_id passed to add_to_playlists
+            self.assertIsNotNone(args[1], "add_to_playlists should not be called with a None track_id")
 
 
 if __name__ == '__main__':
