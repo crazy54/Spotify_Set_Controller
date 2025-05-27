@@ -11,7 +11,7 @@ Setup:
 5. Run: python spot-fav.py setup (first time only)
 6. Use: python spot-fav.py {SPOTIFY_SONG_URL}
 
-config.json example:
+config.json example (NOTE: YOU CAN CREATE THIS BY HAND OR BY USING THE PROMPTS ON THE COMMAND LINE! I SUGGEST USING THE COMMAND LINE PROMPTS TO ENSURE YOU DO NOT HAVE ISSUES!):
 {
     "client_id": "your_spotify_client_id",
     "client_secret": "your_spotify_client_secret",
@@ -544,8 +544,8 @@ def parse_arguments():
         print("  ./spotify_tool.py --copy-playlist <source_url_or_id> <new_name> [-cp] # Copy a playlist")
         print("  ./spotify_tool.py --get-playlist-url <playlist_name> [-gpu] # Get playlist URL by name")
         print("  ./spotify_tool.py --generate-qr <playlist_name_or_url> [output.png] [-qr] # Generate QR code for playlist")
-        print("  ./spotify_tool.py <song_url>                              # Add using default")
-        print("  ./spotify_tool.py <song_url> --genre <name> [-g]          # Add using genre")
+        print("  ./spotify_tool.py <song_url1> [song_url2...]                # Add song(s) using default genre")
+        print("  ./spotify_tool.py <song_url1> [song_url2...] --genre <name> [-g] # Add song(s) using specific genre")
         sys.exit(1)
     
     # Handle special commands
@@ -591,25 +591,42 @@ def parse_arguments():
         return {"command": "show_config"}
     
     # Handle song URL with optional genre
-    # Ensure this is not a special command before treating as song_url
-    if sys.argv[1].startswith("-"):
-        print(f"❌ Unknown command or missing song URL: {sys.argv[1]}")
-        # Consider re-printing usage here or part of it
-        sys.exit(1)
-        
-    song_url = sys.argv[1]
-    genre = None
+    # Handle song URL(s) with optional genre
+    # All other commands start with a flag or are 'setup'
     
-    # Check for genre argument
-    if len(sys.argv) > 2:
-        if sys.argv[2] in ['--genre', '-g']:
-            if len(sys.argv) > 3:
-                genre = sys.argv[3]
+    song_urls = []
+    genre = None
+    idx = 1 # Start parsing from the first argument after script name
+    
+    # Collect song URLs
+    while idx < len(sys.argv) and not sys.argv[idx].startswith("-"):
+        song_urls.append(sys.argv[idx])
+        idx += 1
+        
+    if not song_urls:
+        # This case should ideally be caught by the len(sys.argv) < 2 check,
+        # or if a flag is given as the first arg, it's handled by special commands.
+        # If somehow it reaches here (e.g. script_name --genre rock), it's an error.
+        print("❌ No song URLs provided.")
+        # Re-print usage or a more specific error
+        print("Usage: ./spotify_tool.py <song_url1> [song_url2...] [--genre <name>]")
+        sys.exit(1)
+
+    # Check for genre argument after song URLs
+    if idx < len(sys.argv): # If there are more arguments
+        if sys.argv[idx] in ['--genre', '-g']:
+            if idx + 1 < len(sys.argv):
+                genre = sys.argv[idx+1]
+                idx += 2 # Consumed --genre and its value
             else:
                 print("❌ --genre flag requires a genre name")
                 sys.exit(1)
-    
-    return {"command": "add_song", "url": song_url, "genre": genre}
+        # If there are more args after URLs but not a genre flag, it's an error
+        elif idx < len(sys.argv):
+             print(f"❌ Unknown argument after song URLs: {sys.argv[idx]}")
+             sys.exit(1)
+
+    return {"command": "add_song", "urls": song_urls, "genre": genre}
 
 def main():
     args = parse_arguments()
@@ -641,39 +658,56 @@ def main():
         sp = setup_spotify_client(config)
         generate_playlist_qr_code(sp, playlist_name_or_url, output_filename)
     elif command == "add_song":
-        song_url = args.get("url")
+        song_urls = args.get("urls", []) # Default to empty list
         genre = args.get("genre")
         
+        if not song_urls: # Should be caught by parse_arguments, but as a safeguard
+            print("❌ No song URLs provided to add.")
+            sys.exit(1)
+
         config = load_config()
         sp = setup_spotify_client(config) # Initialize Spotify client
         
-        track_id = extract_track_id(song_url)
-        if not track_id:
-            print(f"❌ Could not extract track ID from URL: {song_url}")
-            if "spotify.link/" in song_url: # Check specifically for short links
-                 print(f"ℹ️ Note: Spotify short links (spotify.link/) might need to be resolved to a full track URL first if direct extraction fails.")
-            sys.exit(1)
+        total_songs = len(song_urls)
+        songs_processed_successfully = 0
 
-        print(f"🎵 Attempting to add track: {track_id}")
+        for i, song_url in enumerate(song_urls):
+            print(f"\nProcessing song {i+1}/{total_songs}: {song_url}")
+            track_id = extract_track_id(song_url)
+            if not track_id:
+                print(f"❌ Could not extract track ID from URL: {song_url}")
+                if "spotify.link/" in song_url: # Check specifically for short links
+                     print(f"ℹ️ Note: Spotify short links (spotify.link/) might need to be resolved to a full track URL first if direct extraction fails.")
+                continue # Skip to the next song
 
-        # Get genre-specific or default playlist configuration
-        genre_config_details = get_genre_config(config, genre) # Renamed to avoid conflict
-        playlist_names_to_add = genre_config_details.get('playlists', [])
-        save_to_liked = genre_config_details.get('save_to_liked', False)
+            print(f"🎵 Attempting to add track: {track_id}")
 
-        # Find playlist IDs for the names from the config
-        target_playlist_ids, not_found_playlists = find_playlist_ids(sp, playlist_names_to_add)
+            # Get genre-specific or default playlist configuration
+            genre_config_details = get_genre_config(config, genre) 
+            playlist_names_to_add = genre_config_details.get('playlists', [])
+            save_to_liked = genre_config_details.get('save_to_liked', False)
 
-        if not_found_playlists:
-            print(f"⚠️ The following playlists from your config were not found on your Spotify account and will be skipped: {', '.join(not_found_playlists)}")
-        
-        if not target_playlist_ids and not save_to_liked:
-            print("No valid playlists found to add the song to, and not saving to Liked Songs. Exiting.")
-            sys.exit(0)
-        
-        print(f"👍 Adding to {len(target_playlist_ids)} playlist(s) and Liked Songs is set to: {'Yes' if save_to_liked else 'No'}")
-        add_to_playlists(sp, track_id, target_playlist_ids, save_to_liked)
-        print("\n🎉 All tasks complete!")
+            # Find playlist IDs for the names from the config
+            target_playlist_ids, not_found_playlists = find_playlist_ids(sp, playlist_names_to_add)
+
+            if not_found_playlists:
+                print(f"⚠️ The following playlists from your config were not found on your Spotify account and will be skipped for this song: {', '.join(not_found_playlists)}")
+            
+            if not target_playlist_ids and not save_to_liked:
+                print(f"No valid playlists found to add song {track_id} to, and not saving to Liked Songs. Skipping this song.")
+                continue
+            
+            print(f"👍 Adding {track_id} to {len(target_playlist_ids)} playlist(s) and Liked Songs is set to: {'Yes' if save_to_liked else 'No'}")
+            # add_to_playlists returns a list of tuples: (playlist_name, success_status, error_message)
+            results = add_to_playlists(sp, track_id, target_playlist_ids, save_to_liked)
+            
+            # Check if all operations for this track were successful
+            # For simplicity, we can count successful additions.
+            # A more robust check might ensure all intended operations succeeded.
+            if any(res[1] for res in results): # If at least one add operation was successful
+                songs_processed_successfully +=1
+
+        print(f"\n🎉 All tasks complete! {songs_processed_successfully}/{total_songs} song(s) processed with at least one successful addition.")
     else:
         # This case should ideally be handled by parse_arguments exiting if the command is invalid
         print(f"❌ Error: Unknown command '{command}'.")
