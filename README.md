@@ -23,6 +23,7 @@ Think of it as your personal cybernetic DJ assistant, ensuring every beat falls 
 *   **Copy Playlist**: Allows copying an existing Spotify playlist (yours or someone else's that you have access to) to a new playlist under your account. Perfect for duplicating curated lists or making your own version of a friend's playlist.
 *   **Get Playlist URL**: Fetches and displays the Spotify URL for one of your playlists by its name. Useful for quickly sharing a link to your favorite mixes.
 *   **Generate Playlist QR Code**: Creates a QR code image for a given playlist name or URL. Share your playlists visually and easily!
+*   **Automated Playlist Curation**: Analyzes an existing playlist's genres and audio features (mood) to generate a list of recommended songs, then creates a new playlist populated with these recommendations. Ideal for discovering new tracks similar to a playlist you love or for creating a fresh mix with a similar vibe.
 
 ## 🚀 Quick Start
 
@@ -127,6 +128,19 @@ Once configured, use The Set Controller with the following commands. Remember to
     # Example (using a playlist URL, default filename 'playlist_qr.png'):
     python spotify_tool.py -qr https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M
     ```
+
+*   **Automated Playlist Curation:**
+    Analyzes a source playlist and generates a new playlist with recommended tracks based on the source's mood and genres.
+    ```bash
+    python spotify_tool.py --curate-playlist <source_playlist_id_or_url> [--new-name <desired_playlist_name>]
+    # Alias: -cpL
+    # Example (with a custom name):
+    python spotify_tool.py --curate-playlist spotify:playlist:37i9dQZF1DXcBWIGoYBM5M --new-name "My Curated Chill Mix"
+    # Example (system-generated name):
+    python spotify_tool.py -cpL https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M 
+    ```
+    If `--new-name` is not provided, a name will be generated based on the source playlist's name and the current date (e.g., "Curated - \[Original Name] - YYYY-MM-DD").
+
 
 *   **List your playlists (with optional search):**
     ```bash
@@ -372,6 +386,71 @@ Creates a QR code image file for a playlist, allowing easy sharing.
     ⚙️ Generating QR code for URL: spotify:playlist:37i9dQZF1DXcBWIGoYBM5M...
     ✅ QR code for playlist URL 'spotify:playlist:37i9dQZF1DXcBWIGoYBM5M' saved to 'custom_top_hits_qr.png'
     ```
+
+#### 9. Automated Playlist Curation
+Analyzes an existing playlist (source) for its general mood and genre characteristics, then generates a list of up to 20 recommended tracks. A new playlist is created and populated with these recommendations.
+
+*   **Command (with a custom new playlist name):**
+    ```bash
+    ./spotify_tool.py --curate-playlist spotify:playlist:37i9dQZF1DXcBWIGoYBM5M --new-name "Curated Pop Vibes"
+    # or using alias -cpL
+    ./spotify_tool.py -cpL https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M --new-name "Curated Pop Vibes"
+    ```
+*   **Command (allowing system-generated playlist name):**
+    ```bash
+    ./spotify_tool.py --curate-playlist spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
+    ```
+*   **Sample Output:**
+    ```text
+    🚀 Starting playlist curation for source: spotify:playlist:37i9dQZF1DXcBWIGoYBM5M
+    
+     tahap 1/5: Analyzing source playlist (ID: 37i9dQZF1DXcBWIGoYBM5M)...
+    🔬 Starting analysis for playlist: 37i9dQZF1DXcBWIGoYBM5M...
+    🔎 Fetching tracks from source playlist ID: 37i9dQZF1DXcBWIGoYBM5M...
+    📊 Found 50 tracks in the playlist.
+    Fetching details for track ID: ... (repeated for tracks)
+    ✅ Successfully fetched details for track ID: ...
+    🎶 Top 5 genres: ['pop', 'dance pop', 'post-teen pop', 'pop rap', 'electropop']
+    🎧 Average audio features: {'danceability': 0.705..., 'energy': 0.668..., ...}
+    🌱 Seed tracks: ['track_id1', 'track_id2', 'track_id3', 'track_id4', 'track_id5']
+    ✅ Analysis complete for playlist 37i9dQZF1DXcBWIGoYBM5M.
+    ✅ Analysis complete.
+    
+     tahap 2/5: Getting recommendations...
+    🧠 Generating recommendations based on analysis...
+    🌱 Using seed tracks: ['spotify:track:track_id1', 'spotify:track:track_id2']
+    🎤 Using seed artists: ['artist_id1', 'artist_id2']
+    🎶 Using seed genres: ['pop', 'dance pop', 'post-teen pop'] 
+    ℹ️ Final seeds for API: Tracks: 2, Artists: 2, Genres: 1 
+    🎯 Using target audio features: {'target_danceability': 0.705..., ...}
+    📞 Calling Spotify recommendations API...
+    ✅ Found 20 recommended tracks.
+    ✅ Got 20 recommendations.
+    
+     tahap 3/5: Determining new playlist name...
+    ℹ️ Using provided name for new playlist: Curated Pop Vibes
+    ✅ New playlist will be named: 'Curated Pop Vibes'.
+    
+     tahap 4/5: Creating new playlist 'Curated Pop Vibes'...
+    ✨ Creating new playlist 'Curated Pop Vibes' for user your_user_id...
+    ✅ New playlist 'Curated Pop Vibes' created successfully with ID: newPlaylistIdGeneratedBySpotify
+    ✅ New playlist created with ID: newPlaylistIdGeneratedBySpotify.
+    
+     tahap 5/5: Populating playlist 'Curated Pop Vibes' with recommended tracks...
+    ➕ Adding 20 tracks to playlist ID: newPlaylistIdGeneratedBySpotify...
+       Added batch of 20 tracks...
+    👍 Successfully added 20/20 tracks to playlist newPlaylistIdGeneratedBySpotify.
+    
+    🎉🎉🎉 Playlist Curation Complete! 🎉🎉🎉
+    ✨ New playlist named 'Curated Pop Vibes' is ready!
+       🆔 ID: newPlaylistIdGeneratedBySpotify
+       🔗 URL: https://open.spotify.com/playlist/newPlaylistIdGeneratedBySpotify
+       🎶 Contains 20 recommended track(s).
+    
+    Enjoy your new curated mix! 🎧
+    ```
+    *(Note: If `--new-name` is not provided, the system will generate a name like "Curated - \[Original Playlist Name] - YYYY-MM-DD")*
+
 
 ### 5.⚙️ Configuration (`config.json`)
 * The `config.json` file is automatically generated/updated by the `setup` and `--playlist-setup` commands. Here's an example structure:

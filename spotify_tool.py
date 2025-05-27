@@ -41,9 +41,11 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 import json
 import sys
+import datetime
 import os
 import re
 import qrcode
+from collections import Counter
 
 CONFIG_FILE = "config.json"
 CACHE_FILE = ".cache"
@@ -243,6 +245,420 @@ def get_genre_config(config, genre=None):
         sys.exit(1)
     
     return config['genres'][target_genre]
+
+def get_track_details(sp, track_ids):
+    """
+    Fetches audio features and artist genres for a list of track IDs.
+
+    :param sp: spotipy.Spotify client instance
+    :param track_ids: A list of Spotify track IDs
+    :return: A list of dictionaries, each containing track_id, audio_features, and artist_genres.
+    """
+    track_details_list = []
+    if not track_ids:
+        return track_details_list
+
+    for track_id in track_ids:
+        try:
+            print(f"Fetching details for track ID: {track_id}...")
+
+            # Fetch audio features
+            audio_features_response = sp.audio_features(tracks=[track_id])
+            # audio_features_response is a list, get the first element
+            current_audio_features = audio_features_response[0] if audio_features_response and audio_features_response[0] else None
+
+            if not current_audio_features:
+                print(f"⚠️ Warning: Could not fetch audio features for track ID: {track_id}. Skipping audio features for this track.")
+                # We can decide to skip the track entirely or proceed without audio features.
+                # For now, let's store None for audio_features and proceed.
+            
+            # Fetch full track details for artist information
+            track_data = sp.track(track_id)
+            if not track_data:
+                print(f"❌ Error: Could not fetch track data for ID: {track_id}. Skipping this track.")
+                continue
+
+            all_artist_genres = set()
+            if 'artists' in track_data:
+                for artist_summary in track_data['artists']:
+                    artist_id = artist_summary.get('id')
+                    if artist_id:
+                        try:
+                            artist_details = sp.artist(artist_id)
+                            if artist_details and 'genres' in artist_details:
+                                all_artist_genres.update(artist_details['genres'])
+                        except Exception as e_artist:
+                            print(f"❌ Error fetching genres for artist ID {artist_id} (track {track_id}): {e_artist}")
+                    else:
+                        print(f"⚠️ Warning: Artist ID missing for an artist in track {track_id}.")
+            else:
+                print(f"⚠️ Warning: No artists found in track data for {track_id}.")
+
+            track_info = {
+                'id': track_id,
+                'audio_features': current_audio_features,
+                'artist_genres': sorted(list(all_artist_genres)) # Store as sorted list
+            }
+            track_details_list.append(track_info)
+            print(f"✅ Successfully fetched details for track ID: {track_id}")
+
+        except Exception as e:
+            print(f"❌ An error occurred while processing track ID {track_id}: {e}")
+            # Optionally, decide if you want to add partial data or skip
+            # For now, we skip the track if a major error occurs in the main try block
+            continue
+            
+    return track_details_list
+
+def analyze_playlist_mood_genre(sp, playlist_id_or_url):
+    """
+    Analyzes a playlist to determine its dominant genres, average audio features,
+    and select a few seed tracks.
+
+    :param sp: spotipy.Spotify client instance
+    :param playlist_id_or_url: Spotify playlist ID or URL
+    :return: A dictionary containing top_genres, average_audio_features, and seed_tracks,
+             or a predefined structure if analysis is not possible.
+    """
+    print(f"🔬 Starting analysis for playlist: {playlist_id_or_url}...")
+    
+    playlist_id = extract_playlist_id(playlist_id_or_url)
+    if not playlist_id:
+        print(f"❌ Could not extract playlist ID from: {playlist_id_or_url}")
+        return {'top_genres': [], 'average_audio_features': {}, 'seed_tracks': []}
+
+    # 1. Fetch all track IDs from the playlist
+    source_track_items = []
+    try:
+        print(f"🔎 Fetching tracks from source playlist ID: {playlist_id}...")
+        results = sp.playlist_items(playlist_id)
+        source_track_items.extend(results['items'])
+        while results['next']:
+            results = sp.next(results)
+            source_track_items.extend(results['items'])
+    except Exception as e:
+        print(f"❌ Error fetching tracks from source playlist {playlist_id}: {e}")
+        return {'top_genres': [], 'average_audio_features': {}, 'seed_tracks': []}
+
+    track_ids = []
+    for item in source_track_items:
+        if item and item.get('track') and item['track'].get('id'):
+            track_ids.append(item['track']['id'])
+    
+    if not track_ids:
+        print(f"⚠️ Playlist {playlist_id} is empty or no track IDs could be fetched.")
+        return {'top_genres': [], 'average_audio_features': {}, 'seed_tracks': []}
+    
+    print(f"📊 Found {len(track_ids)} tracks in the playlist.")
+
+    # 2. Get track details (audio features and artist genres)
+    track_details_list = get_track_details(sp, track_ids)
+    if not track_details_list:
+        print(f"⚠️ Could not retrieve details for any tracks in playlist {playlist_id}.")
+        return {'top_genres': [], 'average_audio_features': {}, 'seed_tracks': []}
+
+    # 3. Aggregate genres and determine top N
+    genre_counts = Counter()
+    for track_detail in track_details_list:
+        if track_detail.get('artist_genres'):
+            genre_counts.update(track_detail['artist_genres'])
+    
+    top_n_genres = 5 # Define how many top genres to return
+    top_genres = [genre for genre, count in genre_counts.most_common(top_n_genres)]
+    print(f"🎶 Top {top_n_genres} genres: {top_genres}")
+
+    # 4. Calculate average audio features
+    features_to_average = [
+        'danceability', 'energy', 'valence', 'instrumentalness', 
+        'acousticness', 'speechiness', 'liveness', 'tempo'
+    ]
+    feature_sums = {feature: 0 for feature in features_to_average}
+    feature_counts = {feature: 0 for feature in features_to_average}
+
+    for track_detail in track_details_list:
+        if track_detail.get('audio_features'):
+            audio_features = track_detail['audio_features']
+            for feature in features_to_average:
+                if audio_features.get(feature) is not None: # Check if feature exists and is not None
+                    feature_sums[feature] += audio_features[feature]
+                    feature_counts[feature] += 1
+    
+    average_audio_features = {}
+    for feature in features_to_average:
+        if feature_counts[feature] > 0:
+            average_audio_features[feature] = feature_sums[feature] / feature_counts[feature]
+        else:
+            average_audio_features[feature] = None # Or omit: del average_audio_features[feature]
+    
+    print(f"🎧 Average audio features: {average_audio_features}")
+
+    # 5. Select seed tracks (first up to 5 valid track IDs)
+    seed_tracks = track_ids[:5]
+    print(f"🌱 Seed tracks: {seed_tracks}")
+
+    analysis_result = {
+        'top_genres': top_genres,
+        'average_audio_features': average_audio_features,
+        'seed_tracks': seed_tracks
+    }
+    
+    print(f"✅ Analysis complete for playlist {playlist_id}.")
+    return analysis_result
+
+def get_recommendations(sp, analysis_results, limit=20):
+    """
+    Gets song recommendations based on playlist analysis.
+
+    :param sp: spotipy.Spotify client instance
+    :param analysis_results: Dictionary from analyze_playlist_mood_genre
+    :param limit: Number of recommendations to fetch
+    :return: A list of recommended track IDs, or an empty list if errors occur.
+    """
+    print("🧠 Generating recommendations based on analysis...")
+    if not analysis_results:
+        print("❌ Cannot get recommendations: analysis_results is empty.")
+        return []
+
+    seed_tracks_ids = analysis_results.get('seed_tracks', [])
+    top_genres = analysis_results.get('top_genres', [])
+    average_audio_features = analysis_results.get('average_audio_features', {})
+
+    final_seed_track_uris = []
+    final_seed_artist_ids = []
+    final_seed_genre_list = []
+    
+    # Max 2-3 seed tracks
+    # Convert IDs to URIs: spotify:track:TRACK_ID
+    for track_id in seed_tracks_ids[:2]: # Let's start with up to 2 seed tracks
+        final_seed_track_uris.append(f"spotify:track:{track_id}")
+
+    # Fetch artist IDs for the seed tracks
+    # This is a simplified approach; more robust would be to get all artists and let Spotify pick
+    if final_seed_track_uris:
+        print(f"🌱 Using seed tracks: {final_seed_track_uris}")
+        for track_uri in final_seed_track_uris:
+            track_id_for_artist_fetch = track_uri.split(':')[-1]
+            try:
+                track_info = sp.track(track_id_for_artist_fetch)
+                if track_info and track_info['artists']:
+                    # Using only the first artist as a seed
+                    main_artist_id = track_info['artists'][0]['id']
+                    if main_artist_id:
+                         final_seed_artist_ids.append(main_artist_id)
+            except Exception as e:
+                print(f"⚠️ Error fetching artist for seed track {track_id_for_artist_fetch}: {e}")
+    
+    # Remove duplicate artist IDs, if any
+    final_seed_artist_ids = sorted(list(set(final_seed_artist_ids)))
+    if final_seed_artist_ids:
+        print(f"🎤 Using seed artists: {final_seed_artist_ids}")
+
+    # Prepare seed genres
+    if top_genres:
+        final_seed_genre_list = top_genres
+        print(f"🎶 Using seed genres: {final_seed_genre_list}")
+        
+    # Spotify API limits total seeds (tracks + artists + genres) to 5.
+    # Prioritize tracks, then artists, then genres.
+    
+    current_seeds_count = len(final_seed_track_uris)
+    
+    # Trim artist seeds if necessary
+    available_slots_for_artists = 5 - current_seeds_count
+    final_seed_artist_ids = final_seed_artist_ids[:available_slots_for_artists]
+    current_seeds_count += len(final_seed_artist_ids)
+    
+    # Trim genre seeds if necessary
+    available_slots_for_genres = 5 - current_seeds_count
+    final_seed_genre_list = final_seed_genre_list[:available_slots_for_genres]
+    # current_seeds_count += len(final_seed_genre_list) # Not strictly needed for count after this
+
+    print(f"ℹ️ Final seeds for API: Tracks: {len(final_seed_track_uris)}, Artists: {len(final_seed_artist_ids)}, Genres: {len(final_seed_genre_list)}")
+
+    # Prepare target features
+    target_features_for_api = {}
+    if average_audio_features:
+        for key, value in average_audio_features.items():
+            if value is not None: # Only include features that were successfully averaged
+                target_features_for_api[f"target_{key}"] = value
+        if target_features_for_api:
+             print(f"🎯 Using target audio features: {target_features_for_api}")
+
+
+    # Ensure at least one seed type is present
+    if not final_seed_track_uris and not final_seed_artist_ids and not final_seed_genre_list:
+        print("❌ No seed tracks, artists, or genres available to get recommendations. Aborting.")
+        return []
+
+    try:
+        print("📞 Calling Spotify recommendations API...")
+        recommendations = sp.recommendations(
+            seed_artists=final_seed_artist_ids if final_seed_artist_ids else None, 
+            seed_genres=final_seed_genre_list if final_seed_genre_list else None,
+            seed_tracks=final_seed_track_uris if final_seed_track_uris else None,
+            limit=limit,
+            **target_features_for_api
+        )
+        
+        recommended_track_ids = []
+        if recommendations and recommendations['tracks']:
+            for track in recommendations['tracks']:
+                if track and track.get('id'):
+                    recommended_track_ids.append(track['id'])
+            print(f"✅ Found {len(recommended_track_ids)} recommended tracks.")
+            return recommended_track_ids
+        else:
+            print("⚠️ No tracks returned from recommendations API.")
+            return []
+            
+    except Exception as e:
+        print(f"❌ Error calling Spotify recommendations API: {e}")
+        # Check for specific API errors if needed, e.g., SpotipyHTTPError
+        if hasattr(e, 'http_status') and e.http_status == 400:
+             print("   Detail: Bad request. This might be due to invalid seed combination or feature values.")
+        elif hasattr(e, 'http_status') and e.http_status == 429:
+             print("   Detail: Rate limit exceeded. Please try again later.")
+        return []
+
+def determine_new_playlist_name(sp, source_playlist_id, new_name_provided=None):
+    """
+    Determines the name for a new playlist.
+    If new_name_provided is given, it's used.
+    Otherwise, it defaults to "Curated - [Original Name] - YYYY-MM-DD"
+    or "My Curated Playlist - YYYY-MM-DD" if the original can't be fetched.
+    """
+    if new_name_provided:
+        print(f"ℹ️ Using provided name for new playlist: {new_name_provided}")
+        return new_name_provided
+
+    date_str = datetime.date.today().isoformat()
+    try:
+        playlist_details = sp.playlist(source_playlist_id)
+        original_name = playlist_details.get('name')
+        if original_name:
+            determined_name = f"Curated - {original_name} - {date_str}"
+            print(f"ℹ️ Determined new playlist name: {determined_name}")
+            return determined_name
+        else:
+            print(f"⚠️ Could not retrieve original playlist name for ID {source_playlist_id}. Defaulting name.")
+            return f"My Curated Playlist - {date_str}"
+    except Exception as e:
+        print(f"❌ Error fetching details for source playlist {source_playlist_id}: {e}. Defaulting name.")
+        return f"My Curated Playlist - {date_str}"
+
+def create_empty_playlist(sp, playlist_name):
+    """
+    Creates a new empty playlist for the current user.
+
+    :param sp: spotipy.Spotify client instance
+    :param playlist_name: The name for the new playlist
+    :return: The ID of the new playlist, or None if creation fails.
+    """
+    try:
+        user_id = sp.me()['id']
+        print(f"✨ Creating new playlist '{playlist_name}' for user {user_id}...")
+        new_playlist = sp.user_playlist_create(user=user_id, name=playlist_name, public=True) # Defaulting to public
+        new_playlist_id = new_playlist['id']
+        print(f"✅ New playlist '{playlist_name}' created successfully with ID: {new_playlist_id}")
+        return new_playlist_id
+    except Exception as e:
+        print(f"❌ Error creating new playlist '{playlist_name}': {e}")
+        return None
+
+def populate_playlist_with_tracks(sp, playlist_id, track_ids):
+    """
+    Populates a given playlist with a list of track IDs.
+
+    :param sp: spotipy.Spotify client instance
+    :param playlist_id: The ID of the playlist to add tracks to.
+    :param track_ids: A list of Spotify track IDs.
+    :return: The number of tracks successfully added.
+    """
+    if not track_ids:
+        print("ℹ️ No tracks provided to add to the playlist.")
+        return 0
+
+    track_uris = [f"spotify:track:{track_id}" for track_id in track_ids if track_id]
+    if not track_uris:
+        print("ℹ️ No valid track URIs to add after filtering.")
+        return 0
+        
+    print(f"➕ Adding {len(track_uris)} tracks to playlist ID: {playlist_id}...")
+    tracks_added_count = 0
+    batch_size = 100 # Spotify API limit per request
+
+    for i in range(0, len(track_uris), batch_size):
+        batch = track_uris[i:i + batch_size]
+        try:
+            sp.playlist_add_items(playlist_id, batch)
+            tracks_added_count += len(batch)
+            print(f"   Added batch of {len(batch)} tracks...")
+        except Exception as e:
+            print(f"❌ Error adding batch of tracks to playlist {playlist_id}: {e}")
+            # Decide if to continue with other batches or stop. For now, report and continue.
+            
+    print(f"👍 Successfully added {tracks_added_count}/{len(track_uris)} tracks to playlist {playlist_id}.")
+    return tracks_added_count
+
+def curate_playlist_command(sp, source_playlist_id_or_url, new_playlist_name_arg=None):
+    """
+    Orchestrates the playlist curation process.
+    
+    1. Analyzes a source playlist.
+    2. Gets recommendations based on the analysis.
+    3. Creates a new playlist.
+    4. Populates the new playlist with recommended tracks.
+    """
+    print(f"🚀 Starting playlist curation for source: {source_playlist_id_or_url}")
+
+    # 1. Extract Source Playlist ID
+    source_playlist_id = extract_playlist_id(source_playlist_id_or_url)
+    if not source_playlist_id:
+        print(f"❌ Critical: Could not extract a valid playlist ID from '{source_playlist_id_or_url}'. Aborting curation.")
+        return
+
+    # 2. Analyze Source Playlist
+    print(f"\n tahap 1/5: Analyzing source playlist (ID: {source_playlist_id})...")
+    analysis_results = analyze_playlist_mood_genre(sp, source_playlist_id)
+    if not analysis_results or (not analysis_results.get('seed_tracks') and not analysis_results.get('top_genres') and not analysis_results.get('average_audio_features')):
+        print(f"❌ Critical: Analysis of playlist ID {source_playlist_id} failed or returned insufficient data (no seeds/genres/features). Aborting curation.")
+        return
+    print("✅ Analysis complete.")
+
+    # 3. Get Recommendations
+    print(f"\n tahap 2/5: Getting recommendations...")
+    # Using a default limit of 20 for now, can be made configurable
+    recommended_track_ids = get_recommendations(sp, analysis_results, limit=20) 
+    if not recommended_track_ids:
+        print("❌ Critical: No recommendations returned. Aborting curation.")
+        return
+    print(f"✅ Got {len(recommended_track_ids)} recommendations.")
+
+    # 4. Determine New Playlist Name
+    print(f"\n tahap 3/5: Determining new playlist name...")
+    determined_playlist_name = determine_new_playlist_name(sp, source_playlist_id, new_playlist_name_arg)
+    print(f"✅ New playlist will be named: '{determined_playlist_name}'.")
+
+    # 5. Create New Playlist
+    print(f"\n tahap 4/5: Creating new playlist '{determined_playlist_name}'...")
+    new_created_playlist_id = create_empty_playlist(sp, determined_playlist_name)
+    if not new_created_playlist_id:
+        print(f"❌ Critical: Failed to create the new playlist '{determined_playlist_name}'. Aborting curation.")
+        return
+    print(f"✅ New playlist created with ID: {new_created_playlist_id}.")
+
+    # 6. Populate New Playlist
+    print(f"\n tahap 5/5: Populating playlist '{determined_playlist_name}' with recommended tracks...")
+    num_tracks_added = populate_playlist_with_tracks(sp, new_created_playlist_id, recommended_track_ids)
+    
+    # 7. Print Final Success Message
+    new_playlist_url = f"https://open.spotify.com/playlist/{new_created_playlist_id}"
+    print("\n🎉🎉🎉 Playlist Curation Complete! 🎉🎉🎉")
+    print(f"✨ New playlist named '{determined_playlist_name}' is ready!")
+    print(f"   🆔 ID: {new_created_playlist_id}")
+    print(f"   🔗 URL: {new_playlist_url}")
+    print(f"   🎶 Contains {num_tracks_added} recommended track(s).")
+    print("\nEnjoy your new curated mix! 🎧")
 
 def setup_command():
     """Setup command - authenticate and show available playlists"""
@@ -548,6 +964,7 @@ def parse_arguments():
         print("  ./spotify_tool.py --list-playlists 'search' [-lp]         # Search playlists")
         print("  ./spotify_tool.py --show-config [-sc]                     # Show genre config")
         print("  ./spotify_tool.py --copy-playlist <source_url_or_id> <new_name> [-cp] # Copy a playlist")
+        print("  ./spotify_tool.py --curate-playlist <source_playlist_id_or_url> [--new-name <playlist_name>] [-cpL] # Curate a playlist")
         print("  ./spotify_tool.py --get-playlist-url <playlist_name> [-gpu] # Get playlist URL by name")
         print("  ./spotify_tool.py --generate-qr <playlist_name_or_url> [output.png] [-qr] # Generate QR code for playlist")
         print("  ./spotify_tool.py <song_url1> [song_url2...]                # Add song(s) using default genre")
@@ -566,6 +983,39 @@ def parse_arguments():
             print("❌ --copy-playlist requires <source_playlist_id_or_url> and <new_playlist_name>")
             sys.exit(1)
         return {"command": "copy_playlist", "source": sys.argv[2], "name": sys.argv[3]}
+
+    if sys.argv[1] in ["--curate-playlist", "-cpL"]:
+        if len(sys.argv) < 3:
+            print("❌ --curate-playlist requires <source_playlist_id_or_url>")
+            sys.exit(1)
+        
+        source_playlist_id_or_url = sys.argv[2]
+        new_name = None
+        
+        # Check for optional --new-name argument
+        if len(sys.argv) > 3:
+            if sys.argv[3] == "--new-name":
+                if len(sys.argv) > 4:
+                    new_name = sys.argv[4]
+                else:
+                    print("❌ --new-name flag requires a playlist name")
+                    sys.exit(1)
+            # If there's a 4th argument and it's not --new-name, it's an error,
+            # unless we decide to allow other optional args in the future.
+            # For now, any extra arg not part of --new-name is unexpected.
+            elif sys.argv[3].startswith("-"): # some other flag, not allowed here
+                 print(f"❌ Unknown option after source playlist for --curate-playlist: {sys.argv[3]}")
+                 sys.exit(1)
+            # If it's not a flag, and not --new-name, it's an error as we expect --new-name or nothing
+            else:
+                 print(f"❌ Unexpected argument after source playlist for --curate-playlist: {sys.argv[3]}. Did you mean --new-name?")
+                 sys.exit(1)
+        
+        return {
+            "command": "curate_playlist",
+            "source_playlist_id_or_url": source_playlist_id_or_url,
+            "new_name": new_name
+        }
 
     if sys.argv[1] in ["--get-playlist-url", "-gpu"]:
         if len(sys.argv) < 3:
@@ -652,6 +1102,13 @@ def main():
         config = load_config() # Needed for sp client
         sp = setup_spotify_client(config)
         copy_playlist(sp, source_playlist_id_or_url, new_playlist_name)
+    elif command == "curate_playlist":
+        source_playlist_input = args.get("source_playlist_id_or_url")
+        new_name_input = args.get("new_name")
+        # Initialize Spotify client here as it's needed by the command
+        config = load_config()
+        sp = setup_spotify_client(config)
+        curate_playlist_command(sp, source_playlist_input, new_name_input)
     elif command == "get_playlist_url":
         playlist_name = args.get("playlist_name")
         config = load_config() # Needed for sp client
