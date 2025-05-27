@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock, call
 import sys
 import os
+import qrcode # Import qrcode
 
 # Add the directory containing spotify_tool to sys.path
 # This is to ensure that the spotify_tool module can be imported
@@ -241,7 +242,7 @@ class TestGeneratePlaylistQrCode(unittest.TestCase):
         result_filename = generate_playlist_qr_code(mock_sp_instance, 'Test Playlist', output_filename='test_qr.png')
 
         mock_get_url.assert_called_once_with(mock_sp_instance, 'Test Playlist')
-        MockQRCode.assert_called_once_with(version=1, error_correction='L', box_size=10, border=4)
+        MockQRCode.assert_called_once_with(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
         mock_qr_instance.add_data.assert_called_once_with('http://spotify.com/playlist/id123')
         mock_qr_instance.make.assert_called_once_with(fit=True)
         mock_qr_instance.make_image.assert_called_once_with(fill_color="black", back_color="white")
