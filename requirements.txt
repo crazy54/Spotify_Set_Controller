@@ -3,3 +3,4 @@
 spotipy
 qrcode
 Pillow
+textual>=0.50.0
