@@ -8,6 +8,7 @@ from textual.widgets import (
 )
 from textual.worker import Worker, get_current_worker 
 from textual.reactive import reactive
+from typing import Union
 
 import spotipy 
 
@@ -509,7 +510,7 @@ class CuratePlaylistScreen(Screen):
             event.button.disabled = True ; log_widget = self.query_one(Log); log_widget.clear(); log_widget.write_line("Starting curation process...")
             new_name = self.query_one("#new_curated_name_input", Input).value.strip() or None
             self.run_worker(lambda: self.execute_curation(new_name), thread=True, name=f"curate_{self.source_playlist_id}")
-    async def execute_curation(self, new_name: str | None) -> None:
+    async def execute_curation(self, new_name: Union[str, None]) -> None:
         success = False
         try:
             if not self.app.sp: self.tui_progress_callback("❌ Error: Spotify client not available."); return
@@ -725,7 +726,7 @@ class SpotifyTUI(App):
     sp = None 
     config = None 
     current_playlist_id = reactive(None) 
-    selected_playlist_for_curation: PlaylistItem | None = None 
+    selected_playlist_for_curation: Union[PlaylistItem, None] = None
 
     is_playlist_locked = is_playlist_locked
     lock_playlist = lock_playlist
